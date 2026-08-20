@@ -376,6 +376,130 @@ library's target can import it.
 This is a **library-author** surface, like the podspec dependency it replaces —
 apps don't normally set it.
 
+## Library authors: your library's Swift name
+
+Every autolinked library becomes one SwiftPM target, and that target's name is
+also the prefix its headers are exposed under
+(`#import <SwiftName/MyHeader.h>`). It is derived from the npm package name
+unless the library overrides it.
+
+### How the name is derived
+
+The scope is dropped, the remainder is split on every run of non-alphanumeric
+characters, each part gets its first character upper-cased, and the parts are
+joined:
+
+| npm package             | Swift name            |
+| ----------------------- | --------------------- |
+| `react-native-worklets` | `ReactNativeWorklets` |
+| `@react-native/foo`     | `Foo`                 |
+| `@scope/common`         | `Common`              |
+| `@scope/react-native`   | `ReactNative`         |
+
+Only the first character of each part changes, so casing you already have is
+kept: `RNWorklets` stays `RNWorklets`.
+
+Note the last row: dropping the scope is what makes `@scope/react-native` derive
+`ReactNative`, one of the
+[names React Native reserves](#names-react-native-reserves). A scoped package
+gets its scope back when that happens — the target is named `ScopeReactNative`,
+and the build logs one line naming your package, the reserved name and the name
+it took instead. So scoped packages whose unscoped name is generic (`common`,
+`core`, `react-native`) need no override for this; set `spm.name` only if you
+want a different name than the one it picked. The same borrow settles a
+collision between two libraries — see
+[when two libraries derive the same name](#when-two-libraries-derive-the-same-name).
+
+### Overriding it with `spm.name`
+
+Set `spm.name` in the library's **own** `react-native.config.js` to choose the
+Swift name explicitly:
+
+```js
+// react-native-worklets/react-native.config.js
+module.exports = {
+  dependency: {platforms: {ios: {}}},
+  spm: {name: 'worklets'},
+};
+```
+
+The value must start with a letter or underscore and contain only letters,
+digits, underscores and hyphens — anything else (spaces, dots, slashes) is
+rejected with an error naming your package. There are two reasons to set it:
+
+- **The derived name is reserved and your package is unscoped.** See below.
+- **Your headers are published under a different prefix.** A podspec
+  `s.header_dir` that differs from the derived name has to be mirrored here, or
+  consumers' existing `#import <worklets/...>` lines stop resolving —
+  `react-native-worklets` derives `ReactNativeWorklets` but ships headers as
+  `<worklets/…>`, so it sets `spm.name: 'worklets'`.
+
+### Names React Native reserves
+
+React Native registers these names for its own package and products, so no
+library's target may end up with one of them (matched case-insensitively):
+
+| Name                             | What it is                  |
+| -------------------------------- | --------------------------- |
+| `ReactNative`                    | The React Native package    |
+| `React-GeneratedCode`            | The per-app codegen package |
+| `Autolinked`                     | The autolinking aggregator  |
+| `ReactHeaders`                   | Product                     |
+| `ReactNativeHeaders`             | Product                     |
+| `ReactNativeDependenciesHeaders` | Product                     |
+| `ReactAppHeaders`                | Product                     |
+| `ReactCodegen`                   | Product                     |
+| `ReactAppDependencyProvider`     | Product                     |
+
+Most collisions resolve themselves: a scoped package's derived name gets the
+scope prepended, as [above](#how-the-name-is-derived). The build fails — with an
+error naming the package, the name it resolved to and `spm.name` as the fix,
+rather than SwiftPM reporting a duplicate name from inside dependency resolution
+— for the collisions a scope cannot resolve:
+
+- **An unscoped package**, which has no scope to borrow.
+- **An `spm.name` you set yourself.** It is never rewritten: the name is your
+  choice, so a reserved one is an error rather than something to fix silently.
+- **A scope-prefixed name that is reserved as well** — unlikely, but not assumed
+  away.
+
+The same names are refused to an app's own `spm.modules` entries.
+
+This holds even for a library that ships a
+[framework plugin](#framework-plugins-preview), whose own target the autolinker
+never generates: `react-native spm scaffold` knows nothing about plugins, so
+exempting one command would leave the two disagreeing about the same library.
+One `spm.name` line keeps both happy.
+
+### When two libraries derive the same name
+
+Dropping the scope also makes `@a/foo` and `@b/foo` both derive `Foo`. Every
+scoped library in such a group gets its scope prepended — `AFoo` and `BFoo` —
+and each rewrite is logged, so neither author has to do anything:
+
+| npm packages                                 | Swift names     |
+| -------------------------------------------- | --------------- |
+| `@a/foo` + `@b/foo`                          | `AFoo` + `BFoo` |
+| `@a/foo` + `foo`                             | `AFoo` + `Foo`  |
+| `@a/foo` (with `spm.name: 'Foo'`) + `@b/foo` | `Foo` + `BFoo`  |
+
+Two members never move, and the rest move around them: an unscoped package (no
+scope to borrow) and a name you set with `spm.name` (your choice wins). Every
+scoped member of a group moves rather than one of them keeping the name — there
+is no non-arbitrary way to pick a winner.
+
+The borrow happens once, and then the whole set is checked again. If a borrowed
+name is already taken — `@a/foo` becomes `AFoo`, and a package `a-foo` is
+installed too — or if it is [reserved](#names-react-native-reserves), the build
+fails and one of the libraries has to set `spm.name`. Two libraries quietly
+sharing a target name would be worse than the error.
+
+### Ship the config file
+
+`react-native.config.js` must be inside your package's npm `files` allowlist. If
+it isn't published, consumers get the derived name instead of your override, and
+the mismatch only shows up as a build error in their app.
+
 ## Self-managed community packages
 
 A community library that ships its own `Package.swift` is referenced directly by
