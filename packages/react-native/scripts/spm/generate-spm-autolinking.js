@@ -59,9 +59,12 @@
 
 const {discoverPlugins, invokePlugins} = require('./autolinking-plugins');
 const {
+  SpmNameCollisionError,
+  assertSwiftNameNotReserved,
   defaultReadConfig,
   defaultResolveDep,
   expandSpmDependencies,
+  isValidSwiftName,
 } = require('./expand-spm-dependencies');
 const {readPodspec} = require('./read-podspec');
 const {
@@ -262,6 +265,41 @@ function readSpmModulesFromConfig(
   } catch (e) {
     // Config might use Ruby interop or other patterns – skip
     return [];
+  }
+}
+
+/**
+ * Validates one app-local `spm.modules` name against the same rules a library's
+ * `spm.name` gets: a usable Swift identifier, not a name React Native reserves,
+ * and not one already taken by another module or an autolinked dep.
+ * `taken` maps lower-cased name → the name as written.
+ */
+function assertSpmModuleName(
+  name /*: unknown */,
+  taken /*: Map<string, string> */,
+) /*: void */ {
+  const remedy =
+    "Rename it in this app's react-native.config.js 'spm.modules'.";
+  if (typeof name !== 'string' || !isValidSwiftName(name)) {
+    throw new Error(
+      `react-native autolinking: invalid 'spm.modules' name ${JSON.stringify(name) ?? 'undefined'}: must start with a letter or underscore and contain only letters, digits, underscores, or hyphens.`,
+    );
+  }
+  const moduleName = name;
+  assertSwiftNameNotReserved(moduleName, {
+    label: `the 'spm.modules' entry '${moduleName}'`,
+    remedy,
+    extraReservedNames: reservedNamesForRun(),
+  });
+  const clash = taken.get(moduleName.toLowerCase());
+  if (clash != null) {
+    throw new SpmNameCollisionError(
+      `react-native autolinking: SPM Swift name collision: the 'spm.modules' entry '${moduleName}' ` +
+        (clash === moduleName
+          ? `is already the name of another autolinked target.`
+          : `differs from the existing target '${clash}' only in case, which collides on case-insensitive filesystems.`) +
+        ` ${remedy}`,
+    );
   }
 }
 
@@ -1347,7 +1385,15 @@ function main(argv /*:: ?: Array<string> */) /*: void */ {
   // the globs now relative to its dir and attach the file list to the target
   // so the emission loop below renders `sources: [...]` literally.
   const configModules = readSpmModulesFromConfig(appRoot);
+  // Module names land in the manifest exactly as written, so they get the same
+  // checks a dep's Swift name gets. Seeded with the dep target names already
+  // emitted so a module can't shadow an autolinked library either.
+  const takenSwiftNames /*: Map<string, string> */ = new Map(
+    entries.map(entry => [entry.target.name.toLowerCase(), entry.target.name]),
+  );
   for (const mod of configModules) {
+    assertSpmModuleName(mod.name, takenSwiftNames);
+    takenSwiftNames.set(mod.name.toLowerCase(), mod.name);
     const absPath = path.resolve(appRoot, mod.path);
     const relPath = path.relative(outputDir, absPath);
     const userSources =
