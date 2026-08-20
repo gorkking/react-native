@@ -25,6 +25,12 @@ const {
   reactDescriptor,
   reportMissingManifests,
 } = require('../generate-spm-autolinking');
+const {
+  REACT_CODEGEN_PACKAGE_NAME,
+  REACT_CODEGEN_PRODUCTS,
+  REACT_NATIVE_PACKAGE_NAME,
+  REACT_NATIVE_PRODUCTS,
+} = require('../spm-utils');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -74,6 +80,25 @@ describe('reactDescriptor (plugin context.react)', () => {
 
   it('returns null when there is no resolvable React dependency', () => {
     expect(reactDescriptor(null, null, false)).toBeNull();
+  });
+
+  it('derives the product set from the shared name constants', () => {
+    const d = reactDescriptor(
+      '/abs/app/build/xcframeworks',
+      '../xcframeworks',
+      true,
+    );
+    expect(d.packageRef.name).toBe(REACT_NATIVE_PACKAGE_NAME);
+    expect(d.products).toEqual([
+      ...REACT_NATIVE_PRODUCTS.map(name => ({
+        name,
+        package: REACT_NATIVE_PACKAGE_NAME,
+      })),
+      ...REACT_CODEGEN_PRODUCTS.map(name => ({
+        name,
+        package: REACT_CODEGEN_PACKAGE_NAME,
+      })),
+    ]);
   });
 });
 
